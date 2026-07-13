@@ -233,7 +233,7 @@ fn main() -> Result<(), Box<dyn error::Error>> {
 
     // POS analysis - since Harper's dictionary is case-folded we'll only examine the
     // case-insensitive contexts
-    println!("\n📝 POS analysis:");
+    println!("\n💬 POS analysis:");
 
     type PosPredicate = fn(&DictWordMetadata) -> bool;
 
@@ -249,24 +249,86 @@ fn main() -> Result<(), Box<dyn error::Error>> {
         ("I👤", DictWordMetadata::is_pronoun),
     ];
 
+    let mut poses_to_contexts: std::collections::HashMap<String, Vec<&str>> = std::collections::HashMap::new();
+
     let dictionary = FstDictionary::curated();
     for cic in &case_insensitive_contexts {
         let md = dictionary.get_word_metadata_str(cic);
 
-        let (flags, emojis) = md.as_ref().map_or_else(
-            || (String::new(), String::new()),
+        let poses: Vec<String> = md.as_ref().map_or_else(
+            || vec![],
             |md| {
                 POS.iter()
                     .filter(|&(_, pred)| pred(md))
                     .map(|(syms, _)| {
                         let mut ch = syms.chars();
-                        (ch.next().unwrap(), ch.next().unwrap())
+                        ch.next().unwrap().to_string()
                     })
-                    .unzip()
+                    .collect::<Vec<String>>()
             },
         );
 
-        println!("  ‘{}’ : {flags}", cic);
+        println!("  ‘{}’ : {:?}", cic, poses);
+
+        // make the inverse mapping from pos to contexts (just the poses we actually saw)
+        for pos in &poses {
+            poses_to_contexts.entry(pos.clone()).or_default().push(cic);
+        }
+    }
+
+    // print the inverse mapping
+    for (pos, contexts) in &poses_to_contexts {
+        println!("  {} -> {:?}", pos, contexts);
+    }
+
+    println!("\n🎯 POSes of the confusable contexts:");
+    // print the confusable contexts with their POSes
+    // for each confusable, and then for the `pre` and `post` of each one
+    // show which POSes are most associated which each confusable.[pre|post].context - in descending order
+
+    for (confusable, (pres, posts)) in &confusable_contexts {
+        println!("  ‘{}’:", confusable);
+
+        // Helper closures to fetch and count POS tags for a list of contexts
+        let get_pos_counts = |contexts: &[String]| {
+            let mut counts: std::collections::HashMap<char, usize> = std::collections::HashMap::new();
+            
+            for ctx in contexts {
+                if let Some(md) = dictionary.get_word_metadata_str(ctx) {
+                    for (syms, pred) in POS {
+                        if pred(&md) {
+                            if let Some(first_char) = syms.chars().next() {
+                                *counts.entry(first_char).or_default() += 1;
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Sort by count descending, then alphabetically by POS character
+            let mut sorted_counts: Vec<(char, usize)> = counts.into_iter().collect();
+            sorted_counts.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+            sorted_counts
+        };
+
+        let pre_counts = get_pos_counts(pres);
+        let post_counts = get_pos_counts(posts);
+
+        // Format the results into clean, scannable strings
+        let format_counts = |counts: Vec<(char, usize)>| -> String {
+            if counts.is_empty() {
+                "None".to_string()
+            } else {
+                counts
+                    .into_iter()
+                    .map(|(pos, count)| format!("{}({})", pos, count))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            }
+        };
+
+        println!("    Pre-contexts  POS association: {}", format_counts(pre_counts));
+        println!("    Post-contexts POS association: {}", format_counts(post_counts));
     }
 
     Ok(())
