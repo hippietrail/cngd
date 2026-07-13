@@ -67,22 +67,20 @@ fn main() -> Result<(), Box<dyn error::Error>> {
     let mut sorted_cores: Vec<_> = potential_cores.into_iter().collect();
     sorted_cores.sort_by(|a, b| b.1.cmp(&a.1));
 
-    println!("📊 Frequency counts:");
-    for (core, count) in sorted_cores.iter().take(8) {
-        println!("  {}: {}", core, count);
+    if verbose {
+        println!("📊 Frequency counts:");
+        for (core, count) in sorted_cores.iter().take(8) {
+            println!("  {}: {}", core, count);
+        }
     }
 
-    let core_cluster = clustering::extract_core_cluster(&sorted_cores);
+    let core_cluster = clustering::extract_core_cluster(verbose, &sorted_cores);
 
-    // Determine our target core phrases dynamically
     let targets: Vec<&str> = if !user_specified_cores.is_empty() {
-        // If the user passed terms manually via command line, use those
         user_specified_cores.iter().map(|s| s.as_str()).collect()
     } else if auto_cluster {
-        // If --auto-cluster flag is set, use the dynamic list from clustering.rs
         core_cluster
     } else {
-        // Default fallback behavior: take the top 2 elements
         if sorted_cores.len() < 2 {
             return Err("Not enough core data to extract default pairs.".into());
         }
@@ -169,22 +167,14 @@ fn main() -> Result<(), Box<dyn error::Error>> {
         }
     }
 
-    // println!("\n🎯 Confusable contexts:");
-    // for (confusable, (pres, posts)) in &confusable_contexts {
-    //     println!("  ‘{}’: pre={:?}, post={:?}", confusable, pres, posts);
-    // }
     let count = confusable_contexts.len() as f32;
     println!("\n🎯 Confusable contexts:");
 
     for (i, (confusable, (pres, posts))) in confusable_contexts.iter().enumerate() {
-        // 1. Divide hue wheel by total count for maximally distinct colors
         let hue = (i as f32 / count) * 360.0;
 
-        // 2. Convert HSL to 24-bit RGB (Fix L to ~0.2 for readable dark background)
         let (r, g, b) = hsl_to_rgb(hue, 0.8, 0.2);
 
-        // 3. Print with 24-bit ANSI escape codes
-        // 48;2;{r};{g};{b} sets the truecolor background, 39 resets text color to default
         println!(
             "\x1b[48;2;{};{};{}m ‘{}’: pre={:?}, post={:?} \x1b[0m",
             r, g, b, confusable, pres, posts
@@ -223,20 +213,21 @@ fn main() -> Result<(), Box<dyn error::Error>> {
         }
     }
 
-    println!("\n📋 Summary:");
-    println!(
-        "  Case-sensitive contexts: {}",
-        case_sensitive_contexts.len()
-    );
-    println!(
-        "  Case-insensitive contexts: {}",
-        case_insensitive_contexts.len()
-    );
+    if verbose {
+        println!("\n📋 Summary:");
+        println!(
+            "  Case-sensitive contexts: {}",
+            case_sensitive_contexts.len()
+        );
+        println!(
+            "  Case-insensitive contexts: {}",
+            case_insensitive_contexts.len()
+        );
+    }
 
     Ok(())
 }
 
-// Helper function to convert HSL to RGB
 fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (u8, u8, u8) {
     let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
     let h_prime = h / 60.0;

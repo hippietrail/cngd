@@ -1,7 +1,9 @@
 /// Extracts the statistically significant high-frequency core phrases 
 /// using a rolling baseline divergence threshold.
-pub fn extract_core_cluster<'a>(ranked_cores: &[(&'a str, u32)]) -> Vec<&'a str> {
-    println!("\n📊 Isolating high-frequency variant cluster...");
+pub fn extract_core_cluster<'a>(verbose: bool, ranked_cores: &[(&'a str, u32)]) -> Vec<&'a str> {
+    if verbose {
+        println!("\n📊 Isolating high-frequency variant cluster...");
+    }
 
     if ranked_cores.is_empty() {
         return Vec::new();
@@ -26,21 +28,23 @@ pub fn extract_core_cluster<'a>(ranked_cores: &[(&'a str, u32)]) -> Vec<&'a str>
         cluster_size += 1;
     }
 
-    println!("🤖 Cluster Identification Results:");
-    println!("  📦 Core Cluster Size: {}", cluster_size);
+    if verbose {
+        println!("🤖 Cluster Identification Results:");
+        println!("  📦 Core Cluster Size: {}", cluster_size);
 
-    for (i, &(phrase, score)) in ranked_cores.iter().enumerate() {
-        if i < cluster_size {
-            println!("    👉 Core: '{}' (Score: {})", phrase, score);
-        } else if i < cluster_size + 3 {
-            println!("  📉 [Long-Tail] Phrase: '{}' (Score: {})", phrase, score);
+        for (i, &(phrase, score)) in ranked_cores.iter().enumerate() {
+            if i < cluster_size {
+                println!("    👉 Core: '{}' (Score: {})", phrase, score);
+            } else if i < cluster_size + 3 {
+                println!("  📉 [Long-Tail] Phrase: '{}' (Score: {})", phrase, score);
+            }
         }
-    }
 
-    if ranked_cores.len() > cluster_size + 3 {
-        println!("    ... and {} more long-tail items.", ranked_cores.len() - cluster_size - 3);
+        if ranked_cores.len() > cluster_size + 3 {
+            println!("    ... and {} more long-tail items.", ranked_cores.len() - cluster_size - 3);
+        }
+        println!("---------------------------------------------------\n");
     }
-    println!("---------------------------------------------------\n");
 
     // Return the clean slices back to main
     ranked_cores.iter()
