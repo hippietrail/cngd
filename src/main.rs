@@ -6,6 +6,9 @@ use std::{
     io::{self, BufRead},
 };
 
+use harper_core::DictWordMetadata;
+use harper_core::spell::{Dictionary, FstDictionary};
+
 #[macro_export]
 macro_rules! vprintln {
     ($verbose:expr, $($arg:tt)*) => {
@@ -200,7 +203,7 @@ fn main() -> Result<(), Box<dyn error::Error>> {
             .into_iter()
             .cloned()
             .collect();
-        if unique_variants.len() == 1 {
+        if unique_variants.len() != 1 {
             vprintln!(
                 verbose,
                 "  CASE-SENSITIVE: ‘{}’ (only: {:?})",
@@ -227,6 +230,44 @@ fn main() -> Result<(), Box<dyn error::Error>> {
         case_sensitive_contexts.len(),
         case_insensitive_contexts.len()
     );
+
+    // POS analysis - since Harper's dictionary is case-folded we'll only examine the
+    // case-insensitive contexts
+    println!("\n📝 POS analysis:");
+
+    type PosPredicate = fn(&DictWordMetadata) -> bool;
+
+    const POS: &[(&str, PosPredicate)] = &[
+        ("N📦", |m| m.is_noun() && !m.is_proper_noun()),
+        ("O📛", DictWordMetadata::is_proper_noun),
+        ("V🏃", DictWordMetadata::is_verb),
+        ("J🌈", DictWordMetadata::is_adjective),
+        ("R🤷", DictWordMetadata::is_adverb),
+        ("C🔗", DictWordMetadata::is_conjunction),
+        ("D👉", DictWordMetadata::is_determiner),
+        ("P📥", |m| m.preposition),
+        ("I👤", DictWordMetadata::is_pronoun),
+    ];
+
+    let dictionary = FstDictionary::curated();
+    for cic in &case_insensitive_contexts {
+        let md = dictionary.get_word_metadata_str(cic);
+
+        let (flags, emojis) = md.as_ref().map_or_else(
+            || (String::new(), String::new()),
+            |md| {
+                POS.iter()
+                    .filter(|&(_, pred)| pred(md))
+                    .map(|(syms, _)| {
+                        let mut ch = syms.chars();
+                        (ch.next().unwrap(), ch.next().unwrap())
+                    })
+                    .unzip()
+            },
+        );
+
+        println!("  ‘{}’ : {flags}", cic);
+    }
 
     Ok(())
 }
