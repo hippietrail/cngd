@@ -16,15 +16,21 @@ The current analyzer treats each distinct string as a separate candidate, which 
 - Consider part-of-speech tagging to handle different word classes
 
 ### Variable Set Sizes
-The current approach assumes exactly 2 confusable terms, but real data may have more:
+The current approach supports multiple confusable terms via clustering:
 
 **Examples:**
 - `contend-vs-contest.txt`: 6 variants (contended, contested, contends, contests, contending, contesting)
 - `wide-ranging-vs-wide-sweeping.txt`: 4 variants (wide sweeping, wide - sweeping, wide ranging, wide - ranging)
 
-**Needed improvements:**
-- Clustering algorithms to automatically determine the number of confusable groups
-- Similarity metrics to group related terms
+**Current implementation:**
+- `--auto-cluster` flag enables automatic cluster detection
+- Frequency-based clustering using rolling baseline divergence threshold
+- Automatically determines core cluster size from frequency distribution
+- User can also manually specify cores via command line arguments
+
+**Future improvements:**
+- Similarity-based clustering (Levenshtein, Jaccard, embedding-based)
+- Hierarchical clustering to discover groups
 - Configurable threshold for grouping
 
 ### Hyphenation and Punctuation
@@ -48,25 +54,23 @@ The current approach assumes exactly 2 confusable terms, but real data may have 
 - 0 case-insensitive contexts
 - All context words appear in consistent case
 
-**Implementation for Harper:**
+**Current implementation:**
 - Track case variations for each context word
 - Classify contexts as:
   - **Case-sensitive**: Only one case form observed (e.g., "Mexican", "posterior")
   - **Case-insensitive**: Multiple case forms observed (e.g., "the"/"The")
-- Generate separate rule recommendations:
-  - Use case-sensitive matching for words that only appear in one form
-  - Use case-insensitive matching for words that appear in multiple forms
+- POS analysis uses case-insensitive contexts (since Harper's dictionary is case-folded)
 - This data-driven approach avoids over-generalization while handling natural case variation
 
 ### Multi-word Phrases
 **Example: wide-ranging vs wide-sweeping**
 - Both are 2-word phrases
-- Current splitting logic assumes single-word cores
+- Current implementation supports multi-word confusable terms (cores)
+- Contexts are assumed to be single words for POS dictionary lookup
 
-**Needed improvements:**
-- Support for multi-word confusable terms
-- Configurable phrase length detection
-- N-gram analysis for phrase boundaries
+**Current status:**
+- Multi-word cores are supported (e.g., "search for" vs "search")
+- Context analysis limited to single-word contexts for dictionary compatibility
 
 ## Proposed Architecture
 
@@ -76,19 +80,35 @@ Raw text → Normalization → Tokenization → Lemmatization → Feature extrac
 ```
 
 ### 2. Clustering Stage
-- Use similarity metrics (Levenshtein, Jaccard, embedding-based)
-- Hierarchical clustering to discover groups
-- Automatic determination of cluster count
+- **Current**: Frequency-based clustering with rolling baseline divergence
+- **Future**: Similarity metrics (Levenshtein, Jaccard, embedding-based)
+- **Future**: Hierarchical clustering to discover groups
+- **Current**: Automatic determination of cluster count
 
 ### 3. Context Analysis
-- Expand context window beyond immediate neighbors
-- Weight contexts by frequency and discriminative power
-- Statistical significance testing
+- **Current**: Single-word context extraction with POS tagging via Harper
+- **Future**: Expand context window beyond immediate neighbors
+- **Future**: Weight contexts by frequency and discriminative power
+- **Future**: Statistical significance testing
 
-### 4. Output Generation
-- Grouped results with confidence scores
-- Contextual examples for each group
-- Statistical summaries
+### 4. POS Analysis Enhancement
+- **Current**: Basic POS categorization (Noun, Verb, Adjective, etc.)
+- **Future**: Drill down into POS sub-properties:
+  - Determiners: kinds (definite/indefinite, demonstrative, etc.)
+  - Pronouns: person (1st/2nd/3rd), number (singular/plural), case (subject/object)
+  - Verbs: tense, aspect, mood, voice inflection patterns
+  - Adjectives: comparative/superlative forms
+  - Adverbs: degree and manner classifications
+- **Future**: Combined analysis views:
+  - Group by all POSes of each context word
+  - Group by all words for each POS category
+  - Cross-tabulation of words × POS matrix
+
+### 5. Output Generation
+- **Current**: Color-coded confusable contexts with POS associations
+- **Future**: Grouped results with confidence scores
+- **Future**: Contextual examples for each group
+- **Future**: Statistical summaries
 
 ## Data Quality Considerations
 

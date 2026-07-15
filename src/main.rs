@@ -237,19 +237,125 @@ fn main() -> Result<(), Box<dyn error::Error>> {
 
     type PosPredicate = fn(&DictWordMetadata) -> bool;
 
-    const POS: &[(&str, PosPredicate)] = &[
-        ("N📦", |m| m.is_noun() && !m.is_proper_noun()),
-        ("O📛", DictWordMetadata::is_proper_noun),
-        ("V🏃", DictWordMetadata::is_verb),
-        ("J🌈", DictWordMetadata::is_adjective),
-        ("R🤷", DictWordMetadata::is_adverb),
-        ("C🔗", DictWordMetadata::is_conjunction),
-        ("D👉", DictWordMetadata::is_determiner),
-        ("P📥", |m| m.preposition),
-        ("I👤", DictWordMetadata::is_pronoun),
+    #[derive(Eq, Hash, PartialEq)]
+    enum POS {
+        Adjective,
+        Adverb,
+        Conjunction,
+        Determiner,
+        Noun,
+        Preposition,
+        Pronoun,
+        ProperNoun,
+        Verb,
+    }
+
+    struct POSInfo {
+        _name: &'static str,
+        _ptb: &'static str, // Penn Treebank
+        letter: &'static str,
+        _emoji: &'static str,
+    }
+
+    // Map from variant to info
+    let pos_info_map = HashMap::from([
+        (
+            POS::Noun,
+            POSInfo {
+                letter: "N",
+                _ptb: "NN", // +S for plural
+                _emoji: "📦",
+                _name: "noun",
+            },
+        ),
+        (
+            POS::ProperNoun,
+            POSInfo {
+                letter: "O",
+                _ptb: "NNP", // +S for plural
+                _emoji: "📛",
+                _name: "proper noun",
+            },
+        ),
+        (
+            POS::Verb,
+            POSInfo {
+                letter: "V",
+                _ptb: "VB", // + D/G/N/P/Z
+                _emoji: "🏃",
+                _name: "verb",
+            },
+        ),
+        (
+            POS::Adjective,
+            POSInfo {
+                letter: "J",
+                _ptb: "JJ", // + R/S
+                _emoji: "🌈",
+                _name: "adjective",
+            },
+        ),
+        (
+            POS::Adverb,
+            POSInfo {
+                letter: "R",
+                _ptb: "RB", // + R/S
+                _emoji: "🤷",
+                _name: "adverb",
+            },
+        ),
+        (
+            POS::Conjunction,
+            POSInfo {
+                letter: "C",
+                _ptb: "CC", // CC = coordinating
+                _emoji: "🔗",
+                _name: "conjunction",
+            },
+        ),
+        (
+            POS::Determiner,
+            POSInfo {
+                letter: "D",
+                _ptb: "DT",
+                _emoji: "👉",
+                _name: "determiner",
+            },
+        ),
+        (
+            POS::Preposition,
+            POSInfo {
+                letter: "P",
+                _ptb: "IN",
+                _emoji: "📥",
+                _name: "preposition",
+            },
+        ),
+        (
+            POS::Pronoun,
+            POSInfo {
+                letter: "I",
+                _ptb: "PRP", // +$
+                _emoji: "👤",
+                _name: "pronoun",
+            },
+        ),
+    ]);
+
+    const POS: &[(POS, /* &str, */ PosPredicate)] = &[
+        (POS::Noun, |m| m.is_noun() && !m.is_proper_noun()),
+        (POS::ProperNoun, DictWordMetadata::is_proper_noun),
+        (POS::Verb, DictWordMetadata::is_verb),
+        (POS::Adjective, DictWordMetadata::is_adjective),
+        (POS::Adverb, DictWordMetadata::is_adverb),
+        (POS::Conjunction, DictWordMetadata::is_conjunction),
+        (POS::Determiner, DictWordMetadata::is_determiner),
+        (POS::Preposition, |m| m.preposition),
+        (POS::Pronoun, DictWordMetadata::is_pronoun),
     ];
 
-    let mut poses_to_contexts: std::collections::HashMap<String, Vec<&str>> = std::collections::HashMap::new();
+    let mut poses_to_contexts: std::collections::HashMap<String, Vec<&str>> =
+        std::collections::HashMap::new();
 
     let dictionary = FstDictionary::curated();
     for cic in &case_insensitive_contexts {
@@ -260,15 +366,15 @@ fn main() -> Result<(), Box<dyn error::Error>> {
             |md| {
                 POS.iter()
                     .filter(|&(_, pred)| pred(md))
-                    .map(|(syms, _)| {
-                        let mut ch = syms.chars();
-                        ch.next().unwrap().to_string()
+                    .map(|(enum_variant, _)| {
+                        let info = pos_info_map.get(enum_variant).unwrap();
+                        info.letter.to_string()
                     })
                     .collect::<Vec<String>>()
             },
         );
 
-        println!("  ‘{}’ : {:?}", cic, poses);
+        vprintln!(verbose, "  ‘{}’ : {:?}", cic, poses);
 
         // make the inverse mapping from pos to contexts (just the poses we actually saw)
         for pos in &poses {
@@ -278,7 +384,7 @@ fn main() -> Result<(), Box<dyn error::Error>> {
 
     // print the inverse mapping
     for (pos, contexts) in &poses_to_contexts {
-        println!("  {} -> {:?}", pos, contexts);
+        vprintln!(verbose, "  {} -> {:?}", pos, contexts);
     }
 
     println!("\n🎯 POSes of the confusable contexts:");
@@ -286,25 +392,32 @@ fn main() -> Result<(), Box<dyn error::Error>> {
     // for each confusable, and then for the `pre` and `post` of each one
     // show which POSes are most associated which each confusable.[pre|post].context - in descending order
 
-    for (confusable, (pres, posts)) in &confusable_contexts {
-        println!("  ‘{}’:", confusable);
+    for (i, (confusable, (pres, posts))) in confusable_contexts.iter().enumerate() {
+        let hue = (i as f32 / confusable_contexts.len() as f32) * 360.0;
+        let (r, g, b) = hsl_to_rgb(hue, 0.8, 0.2);
+        println!(
+            "\x1b[48;2;{};{};{}m  ‘{}’:\x1b[0m",
+            r, g, b, confusable
+        );
 
         // Helper closures to fetch and count POS tags for a list of contexts
         let get_pos_counts = |contexts: &[String]| {
-            let mut counts: std::collections::HashMap<char, usize> = std::collections::HashMap::new();
-            
+            let mut counts: std::collections::HashMap<char, usize> =
+                std::collections::HashMap::new();
+
             for ctx in contexts {
                 if let Some(md) = dictionary.get_word_metadata_str(ctx) {
-                    for (syms, pred) in POS {
+                    for (enum_variant, pred) in POS {
                         if pred(&md) {
-                            if let Some(first_char) = syms.chars().next() {
-                                *counts.entry(first_char).or_default() += 1;
-                            }
+                            let info = pos_info_map.get(enum_variant).unwrap();
+                            *counts
+                                .entry(info.letter.chars().next().unwrap())
+                                .or_default() += 1;
                         }
                     }
                 }
             }
-            
+
             // Sort by count descending, then alphabetically by POS character
             let mut sorted_counts: Vec<(char, usize)> = counts.into_iter().collect();
             sorted_counts.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
@@ -314,21 +427,36 @@ fn main() -> Result<(), Box<dyn error::Error>> {
         let pre_counts = get_pos_counts(pres);
         let post_counts = get_pos_counts(posts);
 
-        // Format the results into clean, scannable strings
+        // Format the results into clean, scannable strings with color
         let format_counts = |counts: Vec<(char, usize)>| -> String {
             if counts.is_empty() {
                 "None".to_string()
             } else {
+                let len = counts.len();
                 counts
                     .into_iter()
-                    .map(|(pos, count)| format!("{}({})", pos, count))
+                    .enumerate()
+                    .map(|(i, (pos, count))| {
+                        let hue = (i as f32 / len as f32) * 360.0;
+                        let (r, g, b) = hsl_to_rgb(hue, 0.8, 0.2);
+                        format!(
+                            "\x1b[48;2;{};{};{}m{}({})\x1b[0m",
+                            r, g, b, pos, count
+                        )
+                    })
                     .collect::<Vec<_>>()
                     .join(", ")
             }
         };
 
-        println!("    Pre-contexts  POS association: {}", format_counts(pre_counts));
-        println!("    Post-contexts POS association: {}", format_counts(post_counts));
+        println!(
+            "    Pre-contexts  POS association: {}",
+            format_counts(pre_counts)
+        );
+        println!(
+            "    Post-contexts POS association: {}",
+            format_counts(post_counts)
+        );
     }
 
     Ok(())
