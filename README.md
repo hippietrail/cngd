@@ -2,7 +2,19 @@
 
 The idea is that you can use Google NGrams with two confusable terms in combination with the `*` wildcard before and after each one to see the most common previous and next words when each term is used.
 
-You can copy and paste the column of variants from the right side of the graph and save into a text file.
+## Getting Data from Google Ngrams
+
+1. **Construct the query**: Use the `*` wildcard before and after each confusable term to capture context words:
+
+   ![Google Ngrams Query](google-ngrams-query.png)
+
+   Example query: `* control flow * * control flows *`
+
+2. **Copy the results**: Select and copy the variants column from the results:
+
+   ![Google Ngrams Selection](google-ngrams-selection.png)
+
+3. **Save to file**: Paste the copied data into a text file (e.g., `variants.txt`)
 
 ## Usage
 
