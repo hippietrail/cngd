@@ -1,4 +1,5 @@
 mod clustering;
+mod pos;
 
 use std::{
     collections::HashMap,
@@ -6,7 +7,6 @@ use std::{
     io::{self, BufRead},
 };
 
-use harper_core::DictWordMetadata;
 use harper_core::spell::{Dictionary, FstDictionary};
 
 #[macro_export]
@@ -38,7 +38,7 @@ fn main() -> Result<(), Box<dyn error::Error>> {
         } else if arg == "--auto-cluster" {
             auto_cluster = true;
         } else {
-            eprintln!("🤞: {}", arg);
+            evprintln!(verbose, "🤞: {}", arg);
             user_specified_cores.push(arg);
         }
     }
@@ -235,125 +235,6 @@ fn main() -> Result<(), Box<dyn error::Error>> {
     // case-insensitive contexts
     println!("\n💬 POS analysis:");
 
-    type PosPredicate = fn(&DictWordMetadata) -> bool;
-
-    #[derive(Eq, Hash, PartialEq)]
-    enum POS {
-        Adjective,
-        Adverb,
-        Conjunction,
-        Determiner,
-        Noun,
-        Preposition,
-        Pronoun,
-        ProperNoun,
-        Verb,
-    }
-
-    struct POSInfo {
-        _name: &'static str,
-        _ptb: &'static str, // Penn Treebank
-        letter: &'static str,
-        _emoji: &'static str,
-    }
-
-    // Map from variant to info
-    let pos_info_map = HashMap::from([
-        (
-            POS::Noun,
-            POSInfo {
-                letter: "N",
-                _ptb: "NN", // +S for plural
-                _emoji: "📦",
-                _name: "noun",
-            },
-        ),
-        (
-            POS::ProperNoun,
-            POSInfo {
-                letter: "O",
-                _ptb: "NNP", // +S for plural
-                _emoji: "📛",
-                _name: "proper noun",
-            },
-        ),
-        (
-            POS::Verb,
-            POSInfo {
-                letter: "V",
-                _ptb: "VB", // + D/G/N/P/Z
-                _emoji: "🏃",
-                _name: "verb",
-            },
-        ),
-        (
-            POS::Adjective,
-            POSInfo {
-                letter: "J",
-                _ptb: "JJ", // + R/S
-                _emoji: "🌈",
-                _name: "adjective",
-            },
-        ),
-        (
-            POS::Adverb,
-            POSInfo {
-                letter: "R",
-                _ptb: "RB", // + R/S
-                _emoji: "🤷",
-                _name: "adverb",
-            },
-        ),
-        (
-            POS::Conjunction,
-            POSInfo {
-                letter: "C",
-                _ptb: "CC", // CC = coordinating
-                _emoji: "🔗",
-                _name: "conjunction",
-            },
-        ),
-        (
-            POS::Determiner,
-            POSInfo {
-                letter: "D",
-                _ptb: "DT",
-                _emoji: "👉",
-                _name: "determiner",
-            },
-        ),
-        (
-            POS::Preposition,
-            POSInfo {
-                letter: "P",
-                _ptb: "IN",
-                _emoji: "📥",
-                _name: "preposition",
-            },
-        ),
-        (
-            POS::Pronoun,
-            POSInfo {
-                letter: "I",
-                _ptb: "PRP", // +$
-                _emoji: "👤",
-                _name: "pronoun",
-            },
-        ),
-    ]);
-
-    const POS: &[(POS, /* &str, */ PosPredicate)] = &[
-        (POS::Noun, |m| m.is_noun() && !m.is_proper_noun()),
-        (POS::ProperNoun, DictWordMetadata::is_proper_noun),
-        (POS::Verb, DictWordMetadata::is_verb),
-        (POS::Adjective, DictWordMetadata::is_adjective),
-        (POS::Adverb, DictWordMetadata::is_adverb),
-        (POS::Conjunction, DictWordMetadata::is_conjunction),
-        (POS::Determiner, DictWordMetadata::is_determiner),
-        (POS::Preposition, |m| m.preposition),
-        (POS::Pronoun, DictWordMetadata::is_pronoun),
-    ];
-
     let mut poses_to_contexts: std::collections::HashMap<String, Vec<&str>> =
         std::collections::HashMap::new();
 
@@ -364,10 +245,11 @@ fn main() -> Result<(), Box<dyn error::Error>> {
         let poses: Vec<String> = md.as_ref().map_or_else(
             || vec![],
             |md| {
-                POS.iter()
+                pos::POS_DEFINITIONS
+                    .iter()
                     .filter(|&(_, pred)| pred(md))
                     .map(|(enum_variant, _)| {
-                        let info = pos_info_map.get(enum_variant).unwrap();
+                        let info = pos::pos_info(enum_variant);
                         info.letter.to_string()
                     })
                     .collect::<Vec<String>>()
@@ -407,9 +289,9 @@ fn main() -> Result<(), Box<dyn error::Error>> {
 
             for ctx in contexts {
                 if let Some(md) = dictionary.get_word_metadata_str(ctx) {
-                    for (enum_variant, pred) in POS {
+                    for (enum_variant, pred) in pos::POS_DEFINITIONS {
                         if pred(&md) {
-                            let info = pos_info_map.get(enum_variant).unwrap();
+                            let info = pos::pos_info(enum_variant);
                             *counts
                                 .entry(info.letter.chars().next().unwrap())
                                 .or_default() += 1;
