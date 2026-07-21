@@ -2,7 +2,7 @@ use harper_core::DictWordMetadata;
 
 pub type PosPredicate = fn(&DictWordMetadata) -> bool;
 
-#[derive(Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum POS {
     Adjective,
     Adverb,

@@ -1,367 +1,267 @@
-mod clustering;
 mod pos;
 
+use reqwest;
+use serde_json;
+
 use std::{
-    collections::HashMap,
-    env, error,
-    io::{self, BufRead},
+    collections::{HashMap, HashSet},
+    env,
 };
 
 use harper_core::spell::{Dictionary, FstDictionary};
 
-#[macro_export]
-macro_rules! vprintln {
-    ($verbose:expr, $($arg:tt)*) => {
-        if $verbose {
-            println!($($arg)*);
-        }
-    };
+use pos::POS;
+
+pub struct Cfg {
+    // pub debug: bool,
+    // pub verbose: bool,
+    pub alternatives: Vec<String>,
 }
 
-#[macro_export]
-macro_rules! evprintln {
-    ($verbose:expr, $($arg:tt)*) => {
-        if $verbose {
-            eprintln!($($arg)*);
-        }
-    };
-}
-
-fn main() -> Result<(), Box<dyn error::Error>> {
-    let mut verbose = false;
-    let mut auto_cluster = false;
-    let mut user_specified_cores: Vec<String> = Vec::new();
-
-    for arg in env::args().skip(1) {
-        if arg == "-v" || arg == "--verbose" {
-            verbose = true;
-        } else if arg == "--auto-cluster" {
-            auto_cluster = true;
-        } else {
-            evprintln!(verbose, "🤞: {}", arg);
-            user_specified_cores.push(arg);
-        }
-    }
-
-    let stdin = io::stdin();
-    let lines: Vec<String> = stdin
-        .lock()
-        .lines()
-        .map(|line| line.map(|l| l.trim().to_string()))
-        .collect::<Result<_, _>>()?;
-
-    let mut potential_cores: HashMap<&str, u32> = HashMap::new();
-
-    for line in &lines {
-        if line.is_empty() {
-            return Err("Empty line encountered".into());
-        }
-
-        let (first, maybe_core_end) = line.split_once(' ').ok_or("Missing space separator")?;
-        let (maybe_core_start, last) = line.rsplit_once(' ').ok_or("Missing space separator")?;
-
-        vprintln!(
-            verbose,
-            "\x1b[34m{}\x1b[0m + \x1b[35m{}\x1b[0m \x1b[1;3mOR\x1b[0m \x1b[36m{}\x1b[0m + \x1b[37m{}\x1b[0m",
-            first,
-            maybe_core_end,
-            maybe_core_start,
-            last
-        );
-
-        if potential_cores.is_empty() {
-            evprintln!(
-                verbose,
-                "Adding potential cores: {} and {}",
-                maybe_core_end,
-                maybe_core_start
-            );
-            potential_cores.insert(maybe_core_end, 1);
-            potential_cores.insert(maybe_core_start, 1);
-            if potential_cores.len() != 2 {
-                return Err("Potential cores are the same".into());
-            }
-        } else {
-            *potential_cores.entry(maybe_core_end).or_insert(0) += 1;
-            *potential_cores.entry(maybe_core_start).or_insert(0) += 1;
-        }
-    }
-
-    let mut sorted_cores: Vec<_> = potential_cores.into_iter().collect();
-    sorted_cores.sort_by(|a, b| b.1.cmp(&a.1));
-
-    if verbose {
-        println!("📊 Frequency counts:");
-        for (core, count) in sorted_cores.iter().take(8) {
-            println!("  {}: {}", core, count);
-        }
-    }
-
-    let core_cluster = clustering::extract_core_cluster(verbose, &sorted_cores);
-
-    let targets: Vec<&str> = if !user_specified_cores.is_empty() {
-        user_specified_cores.iter().map(|s| s.as_str()).collect()
-    } else if auto_cluster {
-        core_cluster
-    } else {
-        if sorted_cores.len() < 2 {
-            return Err("Not enough core data to extract default pairs.".into());
-        }
-        vec![sorted_cores[0].0, sorted_cores[1].0]
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut args: Vec<String> = env::args().skip(1).collect();
+    let mut cfg = Cfg {
+        // debug: false,
+        // verbose: false,
+        alternatives: Vec::new(),
     };
 
-    let mut pre_context_map: HashMap<String, Vec<&str>> = HashMap::new();
-    let mut post_context_map: HashMap<String, Vec<&str>> = HashMap::new();
+    while let Some(arg) = args.pop() {
+        // if arg == "--debug" {
+        //     cfg.debug = true;
+        // } else if arg == "--verbose" {
+        //     cfg.verbose = true;
+        // } else {
+        cfg.alternatives.push(arg);
+        // }
+    }
 
-    for line in &lines {
-        for &target in &targets {
-            let target_prefix = format!("{} ", target);
-            let target_suffix = format!(" {}", target);
+    let mut jurl = url::Url::parse("https://books.google.com/ngrams/json").unwrap();
+    let mut gurl = url::Url::parse("https://books.google.com/ngrams/graph").unwrap();
 
-            if let Some(post_context) = line.strip_prefix(&target_prefix) {
-                vprintln!(verbose, "  🍇 F‘{}’ X«{}»", target, post_context);
-                post_context_map
-                    .entry(post_context.to_string())
-                    .or_default()
-                    .push(target);
+    // comma-separated list of terms
+    let content = cfg
+        .alternatives
+        .iter()
+        .map(|t| format!("* {},{} *", t, t))
+        .collect::<Vec<_>>()
+        .join(",");
+
+    jurl.query_pairs_mut().append_pair("content", &content);
+    gurl.query_pairs_mut().append_pair("content", &content);
+
+    println!("URL: {}", gurl);
+
+    let response = reqwest::blocking::get(jurl)?;
+    let json = response.json::<serde_json::Value>()?;
+
+    let mut variant_to_pre_and_post: HashMap<String, [Vec<String>; 2]> = HashMap::new();
+
+    let known_keys = ["ngram", "parent", "timeseries", "type"];
+    for ele in json.as_array().unwrap() {
+        let ob = ele.as_object().unwrap();
+
+        for key in ob.keys() {
+            if !known_keys.contains(&key.as_str()) {
+                return Err(format!("Unknown key: {}", key).into());
             }
-            if let Some(pre_context) = line.strip_suffix(&target_suffix) {
-                vprintln!(verbose, "  🍐 X«{}» F‘{}’", pre_context, target);
-                pre_context_map
-                    .entry(pre_context.to_string())
-                    .or_default()
-                    .push(target);
+            if key == "type" {
+                let type_value = ob.get(key).unwrap();
+                if type_value != "NGRAM_COLLECTION"
+                    && type_value != "EXPANSION"
+                    && type_value != "NGRAM"
+                {
+                    return Err(format!("Unknown type: {}", type_value).into());
+                }
             }
         }
-    }
 
-    let mut confusable_contexts: HashMap<&str, (Vec<String>, Vec<String>)> = HashMap::new();
-    let mut case_analysis: HashMap<String, Vec<String>> = HashMap::new();
-
-    vprintln!(verbose, "Pre-context map:");
-    for (context, confusables) in &pre_context_map {
-        if confusables.len() == 1 {
-            vprintln!(verbose, "  ‘{}’: {:?}", context, confusables);
-            let confusable = confusables[0];
-            confusable_contexts
-                .entry(confusable)
-                .or_default()
-                .0
-                .push(context.clone());
-
-            // Track case variations
-            let lower = context.to_lowercase();
-            case_analysis
-                .entry(lower)
-                .or_default()
-                .push(context.clone());
-        }
-    }
-
-    vprintln!(verbose, "Post-context map:");
-    for (context, confusables) in &post_context_map {
-        if confusables.len() == 1 {
-            vprintln!(verbose, "  ‘{}’: {:?}", context, confusables);
-            let confusable = confusables[0];
-            confusable_contexts
-                .entry(confusable)
-                .or_default()
-                .1
-                .push(context.clone());
-
-            // Track case variations
-            let lower = context.to_lowercase();
-            case_analysis
-                .entry(lower)
-                .or_default()
-                .push(context.clone());
-        }
-    }
-
-    let count = confusable_contexts.len() as f32;
-    println!("\n🎯 Confusable contexts:");
-
-    for (i, (confusable, (pres, posts))) in confusable_contexts.iter().enumerate() {
-        let hue = (i as f32 / count) * 360.0;
-
-        let (r, g, b) = hsl_to_rgb(hue, 0.8, 0.2);
-
-        println!(
-            "\x1b[48;2;{};{};{}m ‘{}’: pre={:?}, post={:?} \x1b[0m",
-            r, g, b, confusable, pres, posts
+        let (ngram, parent, _timeseries, kind) = (
+            ob.get("ngram").unwrap().as_str().unwrap(),
+            ob.get("parent").unwrap().as_str().unwrap(),
+            ob.get("timeseries").unwrap(),
+            ob.get("type").unwrap().as_str().unwrap(),
         );
-    }
 
-    vprintln!(verbose, "\n🔤 Case sensitivity analysis:");
-    let mut case_sensitive_contexts: Vec<&str> = Vec::new();
-    let mut case_insensitive_contexts: Vec<&str> = Vec::new();
+        enum Which {
+            Start,
+            End,
+        }
 
-    for (lower, variants) in &case_analysis {
-        let unique_variants: Vec<_> = variants
-            .iter()
-            .collect::<std::collections::HashSet<_>>()
-            .into_iter()
-            .cloned()
-            .collect();
-        if unique_variants.len() != 1 {
-            vprintln!(
-                verbose,
-                "  CASE-SENSITIVE: ‘{}’ (only: {:?})",
-                lower,
-                unique_variants
-            );
-            case_sensitive_contexts.push(lower);
-        } else {
-            vprintln!(
-                verbose,
-                "  CASE-INSENSITIVE: ‘{}’ (variants: {:?})",
-                lower,
-                unique_variants
-            );
-            case_insensitive_contexts.push(lower);
+        if kind == "EXPANSION" {
+            let (wh, index) = match parent {
+                p if p.starts_with("* ") => (Which::Start, 0),
+                p if p.ends_with(" *") => (Which::End, 1),
+                _ => {
+                    return Err(format!(
+                        "Parent {} does not start with '* ' or end with ' *'",
+                        parent
+                    )
+                    .into());
+                }
+            };
+
+            let (variant, context_word) = match wh {
+                Which::Start => {
+                    // parent is like "* to"
+                    let v = parent.strip_prefix("* ").unwrap().to_string();
+                    // ngram is like "according to" -> we want "according"
+                    let c = ngram
+                        .strip_suffix(&format!(" {}", v))
+                        .unwrap_or(ngram) // Fallback safety
+                        .to_string();
+                    (v, c)
+                }
+                Which::End => {
+                    // parent is like "to *"
+                    let v = parent.strip_suffix(" *").unwrap().to_string();
+                    // ngram is like "to make" -> we want "make"
+                    let c = ngram
+                        .strip_prefix(&format!("{} ", v))
+                        .unwrap_or(ngram)
+                        .to_string();
+                    (v, c)
+                }
+            };
+
+            variant_to_pre_and_post.entry(variant).or_default()[index].push(context_word);
         }
     }
 
-    vprintln!(
-        verbose,
-        "\n📋 Summary:\n\
-          Case-sensitive contexts: {}\n\
-          Case-insensitive contexts: {}",
-        case_sensitive_contexts.len(),
-        case_insensitive_contexts.len()
-    );
+    // for each variant, for each kind of context (pre, post), find which are the 'discriminators'
+    // i.e. the ones in its set but not in the equivalent set of the other variants
 
-    // POS analysis - since Harper's dictionary is case-folded we'll only examine the
-    // case-insensitive contexts
-    println!("\n💬 POS analysis:");
+    // a way to do this is to make a map from each context word to the variants that use it
+    // then for each variant, for each kind of context, find the words that only appear in that variant's contexts
 
-    let mut poses_to_contexts: std::collections::HashMap<String, Vec<&str>> =
-        std::collections::HashMap::new();
+    let dict = FstDictionary::curated();
 
-    let dictionary = FstDictionary::curated();
-    for cic in &case_insensitive_contexts {
-        let md = dictionary.get_word_metadata_str(cic);
-
-        let poses: Vec<String> = md.as_ref().map_or_else(
+    let get_poses = |word: &str| -> Vec<&POS> {
+        dict.get_word_metadata_str(word).map_or_else(
             || vec![],
             |md| {
                 pos::POS_DEFINITIONS
                     .iter()
-                    .filter(|&(_, pred)| pred(md))
-                    .map(|(enum_variant, _)| {
-                        let info = pos::pos_info(enum_variant);
-                        info.letter.to_string()
-                    })
-                    .collect::<Vec<String>>()
+                    .filter(|&(_, pred)| pred(&md))
+                    .map(|(enum_variant, _)| enum_variant)
+                    .collect()
             },
-        );
+        )
+    };
 
-        vprintln!(verbose, "  ‘{}’ : {:?}", cic, poses);
+    let mut pre_words_to_variants: HashMap<String, Vec<String>> = HashMap::new();
+    let mut post_words_to_variants: HashMap<String, Vec<String>> = HashMap::new();
 
-        // make the inverse mapping from pos to contexts (just the poses we actually saw)
-        for pos in &poses {
-            poses_to_contexts.entry(pos.clone()).or_default().push(cic);
-        }
-    }
+    let mut pre_poses_to_variants: HashMap<&POS, HashSet<String>> = HashMap::new();
+    let mut post_poses_to_variants: HashMap<&POS, HashSet<String>> = HashMap::new();
 
-    // print the inverse mapping
-    for (pos, contexts) in &poses_to_contexts {
-        vprintln!(verbose, "  {} -> {:?}", pos, contexts);
-    }
+    let context_kind_names = ["pre", "post"];
 
-    println!("\n🎯 POSes of the confusable contexts:");
-    // print the confusable contexts with their POSes
-    // for each confusable, and then for the `pre` and `post` of each one
-    // show which POSes are most associated which each confusable.[pre|post].context - in descending order
+    for (variant, contexts) in variant_to_pre_and_post.iter() {
+        for (i, context_words) in contexts.iter().enumerate() {
+            let context_kind = context_kind_names[i];
+            let ctx_to_variant = match context_kind {
+                "pre" => &mut pre_words_to_variants,
+                "post" => &mut post_words_to_variants,
+                _ => panic!("Invalid context kind name: {}", context_kind),
+            };
+            for context_word in context_words {
+                ctx_to_variant
+                    .entry(context_word.clone())
+                    .or_default()
+                    .push(variant.clone());
 
-    for (i, (confusable, (pres, posts))) in confusable_contexts.iter().enumerate() {
-        let hue = (i as f32 / confusable_contexts.len() as f32) * 360.0;
-        let (r, g, b) = hsl_to_rgb(hue, 0.8, 0.2);
-        println!(
-            "\x1b[48;2;{};{};{}m  ‘{}’:\x1b[0m",
-            r, g, b, confusable
-        );
-
-        // Helper closures to fetch and count POS tags for a list of contexts
-        let get_pos_counts = |contexts: &[String]| {
-            let mut counts: std::collections::HashMap<char, usize> =
-                std::collections::HashMap::new();
-
-            for ctx in contexts {
-                if let Some(md) = dictionary.get_word_metadata_str(ctx) {
-                    for (enum_variant, pred) in pos::POS_DEFINITIONS {
-                        if pred(&md) {
-                            let info = pos::pos_info(enum_variant);
-                            *counts
-                                .entry(info.letter.chars().next().unwrap())
-                                .or_default() += 1;
+                for pos in get_poses(context_word) {
+                    match context_kind {
+                        "pre" => {
+                            pre_poses_to_variants
+                                .entry(pos)
+                                .or_default()
+                                .insert(variant.clone());
                         }
+                        "post" => {
+                            post_poses_to_variants
+                                .entry(pos)
+                                .or_default()
+                                .insert(variant.clone());
+                        }
+                        _ => panic!("Invalid context kind name: {}", context_kind),
                     }
                 }
             }
+        }
+    }
 
-            // Sort by count descending, then alphabetically by POS character
-            let mut sorted_counts: Vec<(char, usize)> = counts.into_iter().collect();
-            sorted_counts.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-            sorted_counts
-        };
+    for variant in &cfg.alternatives {
+        let pre_pos = pre_poses_to_variants
+            .iter()
+            .filter(|(_, poses)| poses.len() == 1 && poses.contains(variant))
+            .map(|(pos, _)| pos)
+            .collect::<Vec<_>>();
+        let post_pos = post_poses_to_variants
+            .iter()
+            .filter(|(_, poses)| poses.len() == 1 && poses.contains(variant))
+            .map(|(pos, _)| pos)
+            .collect::<Vec<_>>();
 
-        let pre_counts = get_pos_counts(pres);
-        let post_counts = get_pos_counts(posts);
+        let pre_words = pre_words_to_variants
+            .iter()
+            .filter(|(_, variants)| variants.len() == 1 && variants.contains(&variant))
+            .map(|(word, _)| word.as_str())
+            .collect::<Vec<_>>();
+        let post_words = post_words_to_variants
+            .iter()
+            .filter(|(_, variants)| variants.len() == 1 && variants.contains(&variant))
+            .map(|(word, _)| word.as_str())
+            .collect::<Vec<_>>();
 
-        // Format the results into clean, scannable strings with color
-        let format_counts = |counts: Vec<(char, usize)>| -> String {
-            if counts.is_empty() {
-                "None".to_string()
-            } else {
-                let len = counts.len();
-                counts
-                    .into_iter()
-                    .enumerate()
-                    .map(|(i, (pos, count))| {
-                        let hue = (i as f32 / len as f32) * 360.0;
-                        let (r, g, b) = hsl_to_rgb(hue, 0.8, 0.2);
-                        format!(
-                            "\x1b[48;2;{};{};{}m{}({})\x1b[0m",
-                            r, g, b, pos, count
-                        )
+        println!(
+            "\x1b[35m{} | \x1b[36m{} \x1b[33m«« {} »» \x1b[34m{} \x1b[32m| {}\x1b[0m",
+            pre_pos
+                .iter()
+                .map(|pos| pos::pos_info(pos).letter)
+                .collect::<Vec<_>>()
+                .join("/"),
+            pre_words.join("|"),
+            variant,
+            post_words.join("|"),
+            post_pos
+                .iter()
+                .map(|pos| pos::pos_info(pos).letter)
+                .collect::<Vec<_>>()
+                .join("/")
+        );
+
+        // Negative: appears with all-but-this-one variant
+        if cfg.alternatives.len() > 2 {
+            let negative_pre_words =
+                pre_words_to_variants
+                    .iter()
+                    .filter(|(_, variants)| {
+                        variants.len() == cfg.alternatives.len() - 1 
+                        && !variants.contains(&variant)
                     })
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            }
-        };
+                    .map(|(word, _)| word.as_str())
+                    .collect::<Vec<_>>();
 
-        println!(
-            "    Pre-contexts  POS association: {}",
-            format_counts(pre_counts)
-        );
-        println!(
-            "    Post-contexts POS association: {}",
-            format_counts(post_counts)
-        );
+            let negative_post_words =
+                post_words_to_variants
+                    .iter()
+                    .filter(|(_, variants)| {
+                        variants.len() == cfg.alternatives.len() - 1 
+                        && !variants.contains(variant)
+                    })
+                    .map(|(word, _)| word.as_str())
+                    .collect::<Vec<_>>();
+
+            println!(
+                "🚫 \x1b[31m {} | \x1b[33m{} \x1b[31m| {} \x1b[0m",
+                negative_pre_words.join("|"),
+                variant,
+                negative_post_words.join("|")
+            );
+        }
     }
 
     Ok(())
-}
-
-fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (u8, u8, u8) {
-    let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
-    let h_prime = h / 60.0;
-    let x = c * (1.0 - (h_prime % 2.0 - 1.0).abs());
-    let m = l - c / 2.0;
-
-    let (r1, g1, b1) = match h_prime as i32 {
-        0 => (c, x, 0.0),
-        1 => (x, c, 0.0),
-        2 => (0.0, c, x),
-        3 => (0.0, x, c),
-        4 => (x, 0.0, c),
-        _ => (c, 0.0, x),
-    };
-
-    (
-        ((r1 + m) * 255.0).round() as u8,
-        ((g1 + m) * 255.0).round() as u8,
-        ((b1 + m) * 255.0).round() as u8,
-    )
 }
