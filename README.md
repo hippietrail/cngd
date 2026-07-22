@@ -25,16 +25,9 @@ Developers can use this information to write Harper linter rules that flag poten
 
 ## Language Choice
 
-**Rust** is the right choice for this tool because:
+**Rust** chosen because:
 - Harper integration (Harper is written in Rust)
-- Fast processing of large NGrams datasets
-- Memory safety for long-running analysis
 - Uses Harper's lexical POS tagging (the same POS information available to linters)
-
-**Why not other languages/libraries?**
-- 3rd party NLP libraries (NLTK, spaCy) introduce linguistic assumptions that may not align with Harper's approach
-- Harper's dictionary provides the POS information that linters actually have access to, making it the appropriate choice for this analysis
-- While Google NGrams has no official public API, the JSON endpoint can be accessed programmatically for this use case
 
 ## Getting Data from Google Ngrams
 
@@ -42,7 +35,7 @@ The tool now fetches data directly from Google NGrams' JSON endpoint. The query 
 
 Example query constructed internally: `* they ' re,they ' re *,* their,their *,* there,there *`
 
-Note: Google NGrams has limitations on the number of alternatives per query and only allows one `*` per query, which is why the tool makes separate queries for pre-context and post-context.
+Note: Google NGrams has limitations on the number of alternatives per query and only allows one `*` per query, which is why the tool makes separate queries for pre-context and post-context. `*` can only match one word, hence the tool only considers one word of context per side.
 
 ## Usage
 
@@ -83,6 +76,7 @@ This information can be used to create grammar checker rules that help determine
 
 I initially coded this by hand, but with help from the AI assistant built into Devin, the code editor formerly known as Windsurf, and from Google Search's AI.
 
-Once I had it working as I wanted, I got Devin to refactor it to be more idiomatic Rust and then add some trivial features.
-
-I also got Devin to write the "future direction" markdown file.
+Once I had it working as I wanted, I got Devin to refactor it to be more idiomatic Rust and then add some trivial features.  
+Since then I modified it both with hand-coding and using a couple of free coding AIs, mostly for suggestions, but sometimes to directly modify the code.  
+Like many vibe-coded tools, the code got harder to understand and modify, but the basic steps became clearer to me.  
+Then I discovered that Google Ngrams JSON endpoint and rewrote it from scratch by hand. Once more some AI-generated suggestions have since been integrated.  
