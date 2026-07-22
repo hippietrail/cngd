@@ -36,10 +36,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // }
     }
 
-    let mut jurl = url::Url::parse("https://books.google.com/ngrams/json").unwrap();
-    let mut gurl = url::Url::parse("https://books.google.com/ngrams/graph").unwrap();
+    let mut url = url::Url::parse("https://books.google.com/ngrams/json").unwrap();
 
-    // comma-separated list of terms
+    // comma-separated list of terms with wildcards
     let content = cfg
         .alternatives
         .iter()
@@ -47,12 +46,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .collect::<Vec<_>>()
         .join(",");
 
-    jurl.query_pairs_mut().append_pair("content", &content);
-    gurl.query_pairs_mut().append_pair("content", &content);
+    url.query_pairs_mut().append_pair("content", &content);
 
-    println!("URL: {}", gurl);
+    let mut graph_url = url.clone();
+    graph_url.path_segments_mut().unwrap().pop().push("graph");
+    println!("ℹ️ URL: {}", graph_url);
 
-    let response = reqwest::blocking::get(jurl)?;
+    let response = reqwest::blocking::get(url)?;
     let json = response.json::<serde_json::Value>()?;
 
     let mut variant_to_pre_and_post: HashMap<String, [Vec<String>; 2]> = HashMap::new();
@@ -149,41 +149,44 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
     };
 
-    let mut pre_words_to_variants: HashMap<String, Vec<String>> = HashMap::new();
-    let mut post_words_to_variants: HashMap<String, Vec<String>> = HashMap::new();
+    let mut pre_words_case: HashMap<String, Vec<String>> = HashMap::new();
+    let mut post_words_case: HashMap<String, Vec<String>> = HashMap::new();
 
-    let mut pre_poses_to_variants: HashMap<&POS, HashSet<String>> = HashMap::new();
-    let mut post_poses_to_variants: HashMap<&POS, HashSet<String>> = HashMap::new();
+    let mut pre_words_nocase: HashMap<String, Vec<String>> = HashMap::new();
+    let mut post_words_nocase: HashMap<String, Vec<String>> = HashMap::new();
+
+    let mut pre_poses: HashMap<&POS, HashSet<String>> = HashMap::new();
+    let mut post_poses: HashMap<&POS, HashSet<String>> = HashMap::new();
 
     let context_kind_names = ["pre", "post"];
 
     for (variant, contexts) in variant_to_pre_and_post.iter() {
-        for (i, context_words) in contexts.iter().enumerate() {
+        for (i, context_words_case) in contexts.iter().enumerate() {
             let context_kind = context_kind_names[i];
-            let ctx_to_variant = match context_kind {
-                "pre" => &mut pre_words_to_variants,
-                "post" => &mut post_words_to_variants,
+            let (ctx_to_case, ctx_to_nocase) = match context_kind {
+                "pre" => (&mut pre_words_case, &mut pre_words_nocase),
+                "post" => (&mut post_words_case, &mut post_words_nocase),
                 _ => panic!("Invalid context kind name: {}", context_kind),
             };
-            for context_word in context_words {
-                ctx_to_variant
-                    .entry(context_word.clone())
+
+            for context_word_case in context_words_case {
+                ctx_to_case
+                    .entry(context_word_case.clone())
                     .or_default()
                     .push(variant.clone());
 
-                for pos in get_poses(context_word) {
+                ctx_to_nocase
+                    .entry(context_word_case.to_lowercase())
+                    .or_default()
+                    .push(variant.clone());
+
+                for pos in get_poses(context_word_case) {
                     match context_kind {
                         "pre" => {
-                            pre_poses_to_variants
-                                .entry(pos)
-                                .or_default()
-                                .insert(variant.clone());
+                            pre_poses.entry(pos).or_default().insert(variant.clone());
                         }
                         "post" => {
-                            post_poses_to_variants
-                                .entry(pos)
-                                .or_default()
-                                .insert(variant.clone());
+                            post_poses.entry(pos).or_default().insert(variant.clone());
                         }
                         _ => panic!("Invalid context kind name: {}", context_kind),
                     }
@@ -192,29 +195,67 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    output(
+        cfg,
+        pre_poses,
+        post_poses,
+        pre_words_case,
+        post_words_case,
+        pre_words_nocase,
+        post_words_nocase,
+    );
+
+    Ok(())
+}
+
+fn output(
+    cfg: Cfg,
+    pre_poses: HashMap<&POS, HashSet<String>>,
+    post_poses: HashMap<&POS, HashSet<String>>,
+    pre_words_case: HashMap<String, Vec<String>>,
+    post_words_case: HashMap<String, Vec<String>>,
+    pre_words_nocase: HashMap<String, Vec<String>>,
+    post_words_nocase: HashMap<String, Vec<String>>,
+) {
     for variant in &cfg.alternatives {
-        let pre_pos = pre_poses_to_variants
+        let pre_pos = pre_poses
             .iter()
             .filter(|(_, poses)| poses.len() == 1 && poses.contains(variant))
             .map(|(pos, _)| pos)
             .collect::<Vec<_>>();
-        let post_pos = post_poses_to_variants
+        let post_pos = post_poses
             .iter()
             .filter(|(_, poses)| poses.len() == 1 && poses.contains(variant))
             .map(|(pos, _)| pos)
             .collect::<Vec<_>>();
 
-        let pre_words = pre_words_to_variants
+        let mut pre_words = pre_words_case
             .iter()
             .filter(|(_, variants)| variants.len() == 1 && variants.contains(&variant))
             .map(|(word, _)| word.as_str())
             .collect::<Vec<_>>();
-        let post_words = post_words_to_variants
+        pre_words.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+        let mut post_words = post_words_case
             .iter()
             .filter(|(_, variants)| variants.len() == 1 && variants.contains(&variant))
             .map(|(word, _)| word.as_str())
             .collect::<Vec<_>>();
+        post_words.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
 
+        let mut pre_words_nocase = pre_words_nocase
+            .iter()
+            .filter(|(_, variants)| variants.len() == 1 && variants.contains(&variant))
+            .map(|(word, _)| word.as_str())
+            .collect::<Vec<_>>();
+        pre_words_nocase.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+        let mut post_words_nocase = post_words_nocase
+            .iter()
+            .filter(|(_, variants)| variants.len() == 1 && variants.contains(&variant))
+            .map(|(word, _)| word.as_str())
+            .collect::<Vec<_>>();
+        post_words_nocase.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+
+        // POS and case-sensitive word discriminators
         println!(
             "\x1b[35m{} | \x1b[36m{} \x1b[33m«« {} »» \x1b[34m{} \x1b[32m| {}\x1b[0m",
             pre_pos
@@ -232,27 +273,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .join("/")
         );
 
-        // Negative: appears with all-but-this-one variant
-        if cfg.alternatives.len() > 2 {
-            let negative_pre_words =
-                pre_words_to_variants
-                    .iter()
-                    .filter(|(_, variants)| {
-                        variants.len() == cfg.alternatives.len() - 1 
-                        && !variants.contains(&variant)
-                    })
-                    .map(|(word, _)| word.as_str())
-                    .collect::<Vec<_>>();
+        // Case-insensitive word discriminators
+        println!(
+            "    \x1b[36m{} \x1b[33m«« {} »» \x1b[34m{} \x1b[0m",
+            pre_words_nocase.join("|"),
+            variant,
+            post_words_nocase.join("|"),
+        );
 
-            let negative_post_words =
-                post_words_to_variants
-                    .iter()
-                    .filter(|(_, variants)| {
-                        variants.len() == cfg.alternatives.len() - 1 
-                        && !variants.contains(variant)
-                    })
-                    .map(|(word, _)| word.as_str())
-                    .collect::<Vec<_>>();
+        // Negative POS and case-sensitive word discriminators
+        // appears with all variants but this one
+        if cfg.alternatives.len() > 2 {
+            let mut negative_pre_words = pre_words_case
+                .iter()
+                .filter(|(_, variants)| {
+                    variants.len() == cfg.alternatives.len() - 1 && !variants.contains(&variant)
+                })
+                .map(|(word, _)| word.as_str())
+                .collect::<Vec<_>>();
+            negative_pre_words.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+
+            let mut negative_post_words = post_words_case
+                .iter()
+                .filter(|(_, variants)| {
+                    variants.len() == cfg.alternatives.len() - 1 && !variants.contains(variant)
+                })
+                .map(|(word, _)| word.as_str())
+                .collect::<Vec<_>>();
+            negative_post_words.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
 
             println!(
                 "🚫 \x1b[31m {} | \x1b[33m{} \x1b[31m| {} \x1b[0m",
@@ -262,6 +310,4 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
     }
-
-    Ok(())
 }
