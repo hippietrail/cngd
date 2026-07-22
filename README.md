@@ -1,65 +1,81 @@
 "cngd" stands for "contextual n-gram differencer" that Google Search's AI spontaneously called it when I proposed the idea.
 
-The idea is that you can use Google NGrams with two confusable terms in combination with the `*` wildcard before and after each one to see the most common previous and next words when each term is used.
+## Purpose
+
+This tool analyzes commonly confused English words or phrases (e.g., "affect/effect", "their/there/they're") to identify discriminative patterns that help developers write grammar checker rules.
+
+The tool provides information to developers, not automated rule generation. For example, it might reveal: "If 'rightly' comes after a word with POS X or before specific word Y, it's probably a mistake for 'rightfully'."
+
+The analysis works in two stages:
+1. **Word-level discrimination**: Find context words that uniquely identify one confusable term but not others
+2. **POS-level discrimination**: Find part-of-speech patterns that uniquely identify one confusable term but not others
+
+Developers can use this information to write Harper linter rules that flag potential misuse of confusable terms based on their linguistic context.
+
+## How It Works
+
+1. **API Query**: Constructs a Google NGrams JSON API query using the `*` wildcard before and after each confusable term to capture context words
+2. **Data Fetching**: Uses `reqwest` to fetch JSON data directly from Google NGrams
+3. **JSON Parsing**: Parses the NGrams response, extracting EXPANSION-type entries to identify context words
+4. **Context Extraction**: For each confusable term, extracts pre-contexts (words before) and post-contexts (words after) from the ngram data
+5. **Context Mapping**: Builds maps from context words to the variants they appear with, and from POS tags to variants
+6. **Discrimination Analysis**: Finds context words and POS tags that appear with exactly ONE confusable term (these are the discriminators)
+7. **Negative Context Detection**: For >2 alternatives, identifies contexts that appear with all-but-one variant (useful for exclusion rules)
+8. **Output**: Color-coded results showing which context words and POS tags can distinguish between confusable terms
+
+## Language Choice
+
+**Rust** is the right choice for this tool because:
+- Harper integration (Harper is written in Rust)
+- Fast processing of large NGrams datasets
+- Memory safety for long-running analysis
+- Uses Harper's lexical POS tagging (the same POS information available to linters)
+
+**Why not other languages/libraries?**
+- 3rd party NLP libraries (NLTK, spaCy) introduce linguistic assumptions that may not align with Harper's approach
+- Harper's dictionary provides the POS information that linters actually have access to, making it the appropriate choice for this analysis
+- While Google NGrams has no official public API, the JSON endpoint can be accessed programmatically for this use case
 
 ## Getting Data from Google Ngrams
 
-1. **Construct the query**: Use the `*` wildcard before and after each confusable term to capture context words:
+The tool now fetches data directly from Google NGrams' JSON endpoint. The query is automatically constructed using the `*` wildcard before and after each confusable term to capture context words.
 
-   ![Google Ngrams Query](google-ngrams-query.png)
+Example query constructed internally: `* they ' re,they ' re *,* their,their *,* there,there *`
 
-   Example query: `* control flow * * control flows *`
-
-2. **Copy the results**: Select and copy the variants column from the results:
-
-   ![Google Ngrams Selection](google-ngrams-selection.png)
-
-3. **Save to file**: Paste the copied data into a text file (e.g., `variants.txt`)
+Note: Google NGrams has limitations on the number of alternatives per query and only allows one `*` per query, which is why the tool makes separate queries for pre-context and post-context.
 
 ## Usage
 
 ```bash
-# Basic usage - auto-detect the two most frequent confusable terms
-cngd < variants.txt
+# Basic usage - specify confusable terms as arguments
+cargo run --release there their "they ' re"
 
-# Specify confusable terms manually
-cngd < variants.txt term1 term2
+# Multi-word phrases (use quotes)
+cargo run --release "shopping center" "shopping centre" "shopping mall" mall
 
-# Enable automatic clustering for multiple variants
-cngd --auto-cluster < variants.txt
-
-# Verbose output to see intermediate analysis steps
-cngd -v < variants.txt
-cngd --verbose < variants.txt
-
-# Combine options
-cngd --auto-cluster -v < variants.txt
+# Build and run
+cargo build --release
+cargo run --release -- term1 term2 term3
 ```
 
-## Command Line Options
+## Command Line Arguments
 
-- `-v`, `--verbose` - Output intermediate steps of the analysis
-- `--auto-cluster` - Automatically detect clusters of confusable terms using frequency-based analysis
-- `[terms...]` - Manually specify which confusable terms to analyze (space-separated)
+- `[terms...]` - The confusable terms or phrases to analyze (space-separated, use quotes for multi-word phrases)
 
-## How It Works
-
-1. **Input**: Reads phrase variants from stdin (one per line)
-2. **Core Detection**: Identifies potential confusable terms by frequency (or uses manual/auto-cluster selection)
-3. **Context Extraction**: For each confusable term, extracts:
-   - Pre-contexts: words that appear before the term
-   - Post-contexts: words that appear after the term
-4. **Filtering**: Eliminates contexts shared between confusables to find discriminative contexts
-5. **Case Analysis**: Classifies contexts as case-sensitive or case-insensitive
-6. **POS Analysis**: Uses Harper's dictionary to identify part-of-speech patterns for contexts
-7. **Output**: Color-coded results showing which contexts can distinguish between confusable terms
+There are no optional flags - the tool performs the full analysis automatically.
 
 ## Output
 
-The tool outputs:
-- **Confusable contexts**: Which previous/next words uniquely identify each confusable term
-- **POS associations**: Part-of-speech patterns for the discriminative contexts
-- **Case sensitivity**: Whether contexts are case-sensitive or case-insensitive
+The tool outputs color-coded results for each confusable term:
+
+```
+[pre-POS-tags] | [pre-context-words] «« term »» [post-context-words] | [post-POS-tags]
+🚫 [negative-pre-contexts] | term | [negative-post-contexts]
+```
+
+- **POS tags** (single letters): N=noun, V=verb, J=adjective, R=adverb, P=preposition, D=determiner, C=conjunction, I=pronoun, O=proper noun
+- **Context words**: Words that uniquely identify this term (appear with this term but not others)
+- **Negative contexts** (🚫): When analyzing >2 alternatives, contexts that appear with all-but-this-one variant
 
 This information can be used to create grammar checker rules that help determine when a confusable word is used correctly or mistakenly.
 
