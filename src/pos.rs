@@ -3,7 +3,7 @@ use harper_core::DictWordMetadata;
 pub type PosPredicate = fn(&DictWordMetadata) -> bool;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub enum POS {
+pub enum Pos {
     Adjective,
     Adverb,
     Conjunction,
@@ -22,69 +22,69 @@ pub struct POSInfo {
     pub _emoji: &'static str,
 }
 
-pub const POS_DEFINITIONS: &[(POS, PosPredicate)] = &[
-    (POS::Noun, |m| m.is_noun() && !m.is_proper_noun()),
-    (POS::ProperNoun, DictWordMetadata::is_proper_noun),
-    (POS::Verb, DictWordMetadata::is_verb),
-    (POS::Adjective, DictWordMetadata::is_adjective),
-    (POS::Adverb, DictWordMetadata::is_adverb),
-    (POS::Conjunction, DictWordMetadata::is_conjunction),
-    (POS::Determiner, DictWordMetadata::is_determiner),
-    (POS::Preposition, |m| m.preposition),
-    (POS::Pronoun, DictWordMetadata::is_pronoun),
+pub const POS_DEFINITIONS: &[(Pos, PosPredicate)] = &[
+    (Pos::Noun, |m| m.is_noun() && !m.is_proper_noun()),
+    (Pos::ProperNoun, DictWordMetadata::is_proper_noun),
+    (Pos::Verb, DictWordMetadata::is_verb),
+    (Pos::Adjective, DictWordMetadata::is_adjective),
+    (Pos::Adverb, DictWordMetadata::is_adverb),
+    (Pos::Conjunction, DictWordMetadata::is_conjunction),
+    (Pos::Determiner, DictWordMetadata::is_determiner),
+    (Pos::Preposition, |m| m.preposition),
+    (Pos::Pronoun, DictWordMetadata::is_pronoun),
 ];
 
-pub fn pos_info(pos: &POS) -> POSInfo {
+pub fn pos_info(pos: &Pos) -> POSInfo {
     match pos {
-        POS::Noun => POSInfo {
+        Pos::Noun => POSInfo {
             letter: "N",
             _ptb: "NN",
             _emoji: "📦",
             _name: "noun",
         },
-        POS::ProperNoun => POSInfo {
+        Pos::ProperNoun => POSInfo {
             letter: "O",
             _ptb: "NNP",
             _emoji: "📛",
             _name: "proper noun",
         },
-        POS::Verb => POSInfo {
+        Pos::Verb => POSInfo {
             letter: "V",
             _ptb: "VB",
             _emoji: "🏃",
             _name: "verb",
         },
-        POS::Adjective => POSInfo {
+        Pos::Adjective => POSInfo {
             letter: "J",
             _ptb: "JJ",
             _emoji: "🌈",
             _name: "adjective",
         },
-        POS::Adverb => POSInfo {
+        Pos::Adverb => POSInfo {
             letter: "R",
             _ptb: "RB",
             _emoji: "🤷",
             _name: "adverb",
         },
-        POS::Conjunction => POSInfo {
+        Pos::Conjunction => POSInfo {
             letter: "C",
             _ptb: "CC",
             _emoji: "🔗",
             _name: "conjunction",
         },
-        POS::Determiner => POSInfo {
+        Pos::Determiner => POSInfo {
             letter: "D",
             _ptb: "DT",
             _emoji: "👉",
             _name: "determiner",
         },
-        POS::Preposition => POSInfo {
+        Pos::Preposition => POSInfo {
             letter: "P",
             _ptb: "IN",
             _emoji: "📥",
             _name: "preposition",
         },
-        POS::Pronoun => POSInfo {
+        Pos::Pronoun => POSInfo {
             letter: "I",
             _ptb: "PRP",
             _emoji: "👤",
