@@ -124,14 +124,89 @@ fn parse(json: serde_json::Value) -> Result<VariantContextMap, Box<dyn std::erro
     Ok(variant_to_pre_and_post)
 }
 
+#[derive(Debug, Default)]
+pub struct VariantPosMapping {
+    // The POSes of the context words before or after a variant
+    pos_to_variants: HashMap<&'static Pos, HashSet<String>>,
+}
+
+impl VariantPosMapping {
+    fn add(&mut self, variant: &str, pos: &'static Pos) {
+        self.pos_to_variants
+            .entry(pos)
+            .or_default()
+            .insert(variant.to_string());
+    }
+    fn get_all_poses(&self, variant: &str) -> Vec<&'static Pos> {
+        self.pos_to_variants
+            .iter()
+            .filter(|(_, vset)| vset.contains(variant))
+            .map(|(pos, _)| *pos)
+            .collect::<Vec<_>>()
+    }
+    fn get_uniq_poses(&self, variant: &str) -> Vec<&'static Pos> {
+        self.pos_to_variants
+            .iter()
+            .filter(|(_, vset)| vset.len() == 1 && vset.contains(variant))
+            .map(|(pos, _)| *pos)
+            .collect::<Vec<_>>()
+    }
+    fn get_prohib_poses(&self, variant: &str, num_alternatives: usize) -> Vec<&'static Pos> {
+        self.pos_to_variants
+            .iter()
+            .filter(|(_, vset)| vset.len() == num_alternatives - 1 && !vset.contains(variant))
+            .map(|(pos, _)| *pos)
+            .collect::<Vec<_>>()
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct VariantContextWordMapping {
+    // The context words before or after a variant
+    ctx_word_to_variants: HashMap<String, HashSet<String>>,
+}
+
+impl VariantContextWordMapping {
+    fn add(&mut self, variant: &str, ctx_word: &str) {
+        self.ctx_word_to_variants
+            .entry(ctx_word.to_string())
+            .or_default()
+            .insert(variant.to_string());
+    }
+    fn get_all(&self, variant: &str) -> Vec<String> {
+        self.ctx_word_to_variants
+            .iter()
+            .filter(|(_, vset)| vset.contains(variant))
+            .map(|(word, _)| word.clone())
+            .collect()
+    }
+    fn get_uniq(&self, variant: &str) -> Vec<String> {
+        self.ctx_word_to_variants
+            .iter()
+            .filter(|(_, vvec)| vvec.len() == 1 && vvec.contains(&variant.to_string()))
+            .map(|(word, _)| word.clone())
+            .collect()
+    }
+    fn get_prohib(&self, variant: &str, num_alternatives: usize) -> Vec<String> {
+        self.ctx_word_to_variants
+            .iter()
+            .filter(|(_, variants)| {
+                variants.len() == num_alternatives - 1 && !variants.contains(&variant.to_string())
+            })
+            .map(|(word, _)| word.clone())
+            .collect()
+    }
+}
+
 // The variants become the values, since we're looking for contexts that are unique to each variant
+#[derive(Debug, Default)]
 pub struct Analysis {
-    pub pre_poses: HashMap<&'static Pos, HashSet<String>>,
-    pub post_poses: HashMap<&'static Pos, HashSet<String>>,
-    pub pre_words_case: HashMap<String, Vec<String>>,
-    pub post_words_case: HashMap<String, Vec<String>>,
-    pub pre_words_nocase: HashMap<String, Vec<String>>,
-    pub post_words_nocase: HashMap<String, Vec<String>>,
+    pub pre_pos_mappings: VariantPosMapping,
+    pub post_pos_mappings: VariantPosMapping,
+    pub pre_words_case: VariantContextWordMapping,
+    pub post_words_case: VariantContextWordMapping,
+    pub pre_words_nocase: VariantContextWordMapping,
+    pub post_words_nocase: VariantContextWordMapping,
 }
 
 // Look up part-of-speech tags for a word using Harper's curated dictionary
@@ -146,67 +221,42 @@ fn get_poses(dict: &FstDictionary, word: &str) -> Vec<&'static Pos> {
         })
 }
 
-fn analyse(
-    variant_to_pre_and_post: VariantContextMap,
-) -> Result<Analysis, Box<dyn std::error::Error>> {
+// The first part of the analysis puts the information into a data structure that will help
+// us to find the contexts that are unique to each variant
+fn analyse(variants_to_ctx: VariantContextMap) -> Result<Analysis, Box<dyn std::error::Error>> {
     let dict = FstDictionary::curated();
 
-    let mut res = Analysis {
-        pre_poses: HashMap::new(),
-        post_poses: HashMap::new(),
-        pre_words_case: HashMap::new(),
-        post_words_case: HashMap::new(),
-        pre_words_nocase: HashMap::new(),
-        post_words_nocase: HashMap::new(),
-    };
+    let mut an = Analysis::default();
 
-    for (variant, [pre_words, post_words]) in variant_to_pre_and_post {
+    for (variant, [pre_words, post_words]) in variants_to_ctx {
         for word in pre_words {
-            res.pre_words_case
-                .entry(word.clone())
-                .or_default()
-                .push(variant.clone());
-
-            res.pre_words_nocase
-                .entry(word.to_lowercase())
-                .or_default()
-                .push(variant.clone());
+            an.pre_words_case.add(&variant, &word);
+            an.pre_words_nocase.add(&variant, &word.to_lowercase());
 
             for pos in get_poses(&dict, &word) {
-                res.pre_poses
-                    .entry(pos)
-                    .or_default()
-                    .insert(variant.clone());
+                an.pre_pos_mappings.add(&variant, pos);
             }
         }
 
         for word in post_words {
-            res.post_words_case
-                .entry(word.clone())
-                .or_default()
-                .push(variant.clone());
-
-            res.post_words_nocase
-                .entry(word.to_lowercase())
-                .or_default()
-                .push(variant.clone());
+            an.post_words_case.add(&variant, &word);
+            an.post_words_nocase.add(&variant, &word.to_lowercase());
 
             for pos in get_poses(&dict, &word) {
-                res.post_poses
-                    .entry(pos)
-                    .or_default()
-                    .insert(variant.clone());
+                an.post_pos_mappings.add(&variant, pos);
             }
         }
     }
 
-    Ok(res)
+    Ok(an)
 }
 
+// The second part of the analysis is integrated with the output function.
+// We find out which aspects of the context are unique to each variant.
 fn output(cfg: Cfg, analysis: Analysis) {
     let Analysis {
-        pre_poses,
-        post_poses,
+        pre_pos_mappings,
+        post_pos_mappings,
         pre_words_case,
         post_words_case,
         pre_words_nocase,
@@ -214,44 +264,19 @@ fn output(cfg: Cfg, analysis: Analysis) {
     } = analysis;
 
     for variant in &cfg.alternatives {
-        let pre_pos = pre_poses
-            .iter()
-            .filter(|(_, poses)| poses.len() == 1 && poses.contains(variant))
-            .map(|(pos, _)| pos)
-            .collect::<Vec<_>>();
+        let pre_pos = pre_pos_mappings.get_uniq_poses(variant);
+        let post_pos = post_pos_mappings.get_uniq_poses(variant);
 
-        let post_pos = post_poses
-            .iter()
-            .filter(|(_, poses)| poses.len() == 1 && poses.contains(variant))
-            .map(|(pos, _)| pos)
-            .collect::<Vec<_>>();
-
-        let mut pre_words = pre_words_case
-            .iter()
-            .filter(|(_, variants)| variants.len() == 1 && variants.contains(variant))
-            .map(|(word, _)| word.as_str())
-            .collect::<Vec<_>>();
+        let mut pre_words = pre_words_case.get_uniq(variant);
         pre_words.sort_by_key(|a| a.to_lowercase());
 
-        let mut post_words = post_words_case
-            .iter()
-            .filter(|(_, variants)| variants.len() == 1 && variants.contains(variant))
-            .map(|(word, _)| word.as_str())
-            .collect::<Vec<_>>();
+        let mut post_words = post_words_case.get_uniq(variant);
         post_words.sort_by_key(|a| a.to_lowercase());
 
-        let mut pre_words_nocase = pre_words_nocase
-            .iter()
-            .filter(|(_, variants)| variants.len() == 1 && variants.contains(variant))
-            .map(|(word, _)| word.as_str())
-            .collect::<Vec<_>>();
+        let mut pre_words_nocase = pre_words_nocase.get_uniq(variant);
         pre_words_nocase.sort_by_key(|a| a.to_lowercase());
 
-        let mut post_words_nocase = post_words_nocase
-            .iter()
-            .filter(|(_, variants)| variants.len() == 1 && variants.contains(variant))
-            .map(|(word, _)| word.as_str())
-            .collect::<Vec<_>>();
+        let mut post_words_nocase = post_words_nocase.get_uniq(variant);
         post_words_nocase.sort_by_key(|a| a.to_lowercase());
 
         // POS and case-sensitive word discriminators
@@ -262,9 +287,9 @@ fn output(cfg: Cfg, analysis: Analysis) {
                 .map(|pos| pos::pos_info(pos).letter)
                 .collect::<Vec<_>>()
                 .join("/"),
-            pre_words.join("|"),
+            pre_words_nocase.join("|"),
             variant,
-            post_words.join("|"),
+            post_words_nocase.join("|"),
             post_pos
                 .iter()
                 .map(|pos| pos::pos_info(pos).letter)
@@ -272,39 +297,43 @@ fn output(cfg: Cfg, analysis: Analysis) {
                 .join("/")
         );
 
-        // Case-insensitive word discriminators
+        // Case-sensitive word discriminators
         println!(
             "    \x1b[36m{} \x1b[33m«« {} »» \x1b[34m{} \x1b[0m",
-            pre_words_nocase.join("|"),
+            pre_words.join("|"),
             variant,
-            post_words_nocase.join("|"),
+            post_words.join("|"),
         );
 
         // Negative POS and case-sensitive word discriminators
         // appears with all variants but this one
         if cfg.alternatives.len() > 2 {
-            let mut negative_pre_words = pre_words_case
-                .iter()
-                .filter(|(_, variants)| {
-                    variants.len() == cfg.alternatives.len() - 1 && !variants.contains(variant)
-                })
-                .map(|(word, _)| word.as_str())
-                .collect::<Vec<_>>();
+            let negative_pre_pos =
+                pre_pos_mappings.get_prohib_poses(variant, cfg.alternatives.len());
+            let negative_post_pos =
+                post_pos_mappings.get_prohib_poses(variant, cfg.alternatives.len());
+
+            let mut negative_pre_words = pre_words_case.get_prohib(variant, cfg.alternatives.len());
             negative_pre_words.sort_by_key(|a| a.to_lowercase());
 
-            let mut negative_post_words = post_words_case
-                .iter()
-                .filter(|(_, variants)| {
-                    variants.len() == cfg.alternatives.len() - 1 && !variants.contains(variant)
-                })
-                .map(|(word, _)| word.as_str())
-                .collect::<Vec<_>>();
+            let mut negative_post_words =
+                post_words_case.get_prohib(variant, cfg.alternatives.len());
             negative_post_words.sort_by_key(|a| a.to_lowercase());
 
             println!(
-                "🚫 \x1b[31m {} | \x1b[33m{} \x1b[31m| {} \x1b[0m",
+                "🚫 \x1b[31m {} | {} \x1b[33m{} \x1b[31m{} | {} \x1b[0m",
+                negative_pre_pos
+                    .iter()
+                    .map(|pos| pos::pos_info(pos).letter)
+                    .collect::<Vec<_>>()
+                    .join("/"),
                 negative_pre_words.join("|"),
                 variant,
+                negative_post_pos
+                    .iter()
+                    .map(|pos| pos::pos_info(pos).letter)
+                    .collect::<Vec<_>>()
+                    .join("/"),
                 negative_post_words.join("|")
             );
         }
@@ -321,6 +350,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let variant_to_pre_and_post = parse(fetch_json(url)?)?;
 
     let analysis = analyse(variant_to_pre_and_post)?;
+
+    if cfg.raw {
+        for (i, var) in cfg.alternatives.iter().enumerate() {
+            println!("{}{var}", &"\n"[(i == 0) as usize..]);
+            println!(
+                "{}",
+                analysis
+                    .pre_pos_mappings
+                    .get_all_poses(var)
+                    .iter()
+                    .map(|pos| pos::pos_info(pos).letter)
+                    .collect::<Vec<_>>()
+                    .join("/"),
+            );
+            println!("{}", analysis.pre_words_case.get_all(var).join("|"));
+            println!("{}", analysis.post_words_case.get_all(var).join("|"));
+            println!(
+                "{}",
+                analysis
+                    .post_pos_mappings
+                    .get_all_poses(var)
+                    .iter()
+                    .map(|pos| pos::pos_info(pos).letter)
+                    .collect::<Vec<_>>()
+                    .join("/"),
+            );
+        }
+    }
 
     output(cfg, analysis);
 
